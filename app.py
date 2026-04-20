@@ -36,13 +36,13 @@ try:
     df = veri_isle(yuklenen_dosya)
     
     if not df.empty:
-        # Veri Temizleme (Virgülleri noktaya çevir ve float yap)
+        # Veri Temizleme (Virgülleri noktaya çevir)
         for col in ['Enlem', 'Boylam', 'Derinlik_m', 'GYS_m', 'N_arazi', 'FC', 'PI']:
             if col in df.columns:
                 if df[col].dtype == object:
                     df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
         
-        # Koordinat Dönüşümü (UTM vs Derece)
+        # Koordinat Dönüşümü
         min_y, min_x = df['Enlem'].min(), df['Boylam'].min()
         is_utm = abs(min_y) > 90 or abs(min_x) > 180
 
@@ -68,9 +68,9 @@ try:
         crr = np.exp((n160cs/14.1) + (n160cs/126)**2 - (n160cs/23.6)**3 + (n160cs/23.6)**4 - 2.8) * (6.9 * np.exp(-mw/4) - 0.058)
         df['FS'] = (crr / csr).fillna(2.0)
 
-        # HOCANIN İSTEĞİ 1: Renk Atama (Güvenli Alanlar Yeşil)
+        # HOCANIN İSTEĞİ: Güvenli/Sıvılaşmayan zonlar YEŞİL olacak
         def get_color(fs, depth, pi):
-            if depth > 20.0 or pi > 12 or fs > 2.0: return 'green' # Güvenli zonlar
+            if depth > 20.0 or pi > 12 or fs > 2.0: return 'green' 
             if fs < 1.0: return 'red'
             if fs < 1.2: return 'orange'
             return 'green'
@@ -78,6 +78,7 @@ try:
 
         tab1, tab_gis, tab2, tab3 = st.tabs(["🌍 3D Saha & Isı Haritası", "🗺️ Uydu Haritası", "📏 2D Geoteknik Kesit", "📊 Veri Tablosu"])
 
+        # --- SEKME 1: ESKİ MÜKEMMEL 3D GÖRÜNTÜYE DÖNÜŞ ---
         with tab1:
             fig3d = go.Figure()
             # Sondaj Çubukları
@@ -90,31 +91,29 @@ try:
                     line=dict(color='lightgray', width=3)
                 ))
 
-            # 3D Isı Yüzeyi (GÖRÜNTÜ GÜNCELLEMESİ: Griler Yeşil Yapıldı)
-            tol = 2.0
-            dilim = df[(df['Derinlik_m'] >= hedef_derinlik-tol) & (df['Derinlik_m'] <= hedef_derinlik+tol)]
+            # 3D Isı Yüzeyi (Orijinal Plotly Renk Paleti ve Nearest Metodu)
+            tolerans = 2.0
+            dilim = df[(df['Derinlik_m'] >= hedef_derinlik-tolerans) & (df['Derinlik_m'] <= hedef_derinlik+tolerans)]
             
             if len(dilim['Sondaj_No'].unique()) >= 3:
                 isi_veri = dilim.sort_values('Derinlik_m').groupby('Sondaj_No').first().reset_index()
-                gx, gy = np.meshgrid(np.linspace(df['X_m'].min()-10, df['X_m'].max()+10, 50),
-                                     np.linspace(df['Y_m'].min()-10, df['Y_m'].max()+10, 50))
+                grid_x, grid_y = np.meshgrid(np.linspace(df['X_m'].min()-10, df['X_m'].max()+10, 50),
+                                             np.linspace(df['Y_m'].min()-10, df['Y_m'].max()+10, 50))
                 
-                # 'Nearest' metodu ile o geniş blok görünümü sağlanır
-                gz = griddata(isi_veri[['X_m', 'Y_m']].values, isi_veri['FS'].values, (gx, gy), method='nearest')
-                
-                # KRİTİK: Veri olmayan (gri) yerleri Güvenli (Yeşil) yap
-                gz = np.nan_to_num(gz, nan=2.0)
+                # Attığın fotoğraftaki o geniş ve köşeli yayılımı veren orijinal enterpolasyon
+                grid_z = griddata(isi_veri[['X_m', 'Y_m']].values, isi_veri['FS'].values, (grid_x, grid_y), method='nearest')
                 
                 fig3d.add_trace(go.Surface(
-                    x=gx, y=gy, z=np.full(gx.shape, -hedef_derinlik),
-                    surfacecolor=gz, 
-                    colorscale=[[0, 'red'], [0.3, 'orange'], [0.6, 'green'], [1.0, 'darkgreen']], 
+                    x=grid_x, y=grid_y, z=np.full(grid_x.shape, -hedef_derinlik),
+                    surfacecolor=grid_z, 
+                    colorscale='RdYlGn', # Orijinal muhteşem geçişli palet
                     cmin=0.5, cmax=2.0,
-                    opacity=0.75, name='Sıvılaşma Riski'
+                    opacity=0.7, name='Sıvılaşma Riski',
+                    colorbar=dict(title="Risk (FS)")
                 ))
 
             fig3d.update_layout(scene=dict(aspectmode='data', zaxis_title='Derinlik (m)'), 
-                                template="plotly_dark", height=750)
+                                template="plotly_dark", height=700, margin=dict(l=0,r=0,b=0,t=0))
             st.plotly_chart(fig3d, use_container_width=True)
 
         with tab_gis:
@@ -131,7 +130,7 @@ try:
             except:
                 st.warning("Uydu haritası için koordinat verileri eksik veya hatalı.")
 
-        # HOCANIN İSTEĞİ 2: 2D Kesit ve Sıvılaşma Lensi
+        # --- SEKME 2: LENS (DOKUNULMADI, EFSANE KALDI) ---
         with tab2:
             st.markdown("### 📏 2D Stratigrafik Kesit ve Sıvılaşma Lensi")
             tum_kuyular = list(df['Sondaj_No'].unique())
@@ -143,7 +142,6 @@ try:
                 kuyu_x = kesit_df.groupby('Sondaj_No')['X_m'].mean().sort_values()
                 sirali_kuyular = kuyu_x.index.tolist()
 
-                # --- LENS ENTERPOLASYONU ---
                 px, pz, vfs = [], [], []
                 for kuyu in sirali_kuyular:
                     temp_k = kesit_df[kesit_df['Sondaj_No'] == kuyu]
@@ -159,11 +157,10 @@ try:
                     fig2d.add_trace(go.Contour(
                         x=np.linspace(min(px), max(px), 100), y=np.linspace(min(pz), 0, 100), z=grid_fs,
                         colorscale=[[0, 'red'], [0.3, 'orange'], [0.6, 'green'], [1.0, 'darkgreen']],
-                        zmin=0.5, zmax=2.0, # Plotly 2D Contour için zmin kullanılır
+                        zmin=0.5, zmax=2.0, 
                         opacity=0.4, showscale=True, colorbar=dict(title="FS (Risk)")
                     ))
 
-                # Kuyu Çubukları
                 for kuyu in sirali_kuyular:
                     temp_k = kesit_df[kesit_df['Sondaj_No'] == kuyu]
                     fig2d.add_trace(go.Scatter(
