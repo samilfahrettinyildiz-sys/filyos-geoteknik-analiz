@@ -6,7 +6,7 @@ from scipy.interpolate import griddata
 
 # Sayfa Yapılandırması
 st.set_page_config(page_title="Filyos 3D Geoteknik SaaS", layout="wide")
-st.title("🏗️ Filyos Sıvılaşma & Zemin İyileştirme Platformu (PRO+)")
+st.title("🏗️ Sıvılaşma & Zemin İyileştirme ")
 
 # --- 1. SİDEBAR (KONTROLLER) ---
 st.sidebar.header("📂 1. Veri Yükleme")
