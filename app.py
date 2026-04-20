@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from scipy.interpolate import griddata
 
 # Sayfa Yapılandırması
-st.set_page_config(page_title="Filyos 3D Geoteknik SaaS", layout="wide")
+st.set_page_config(page_title="Filyos Sıvılaşma Platformu", layout="wide")
 st.title("🏗️ Filyos Sıvılaşma & Zemin İyileştirme Platformu (PRO+)")
 
 # --- 1. SİDEBAR (KONTROLLER) ---
@@ -16,7 +16,7 @@ st.sidebar.header("⚙️ 2. Deprem Senaryosu")
 pga = st.sidebar.slider("Deprem İvmesi (PGA)", 0.10, 0.60, 0.30, 0.05)
 mw = st.sidebar.slider("Deprem Büyüklüğü (Mw)", 6.0, 8.0, 7.5, 0.1)
 
-st.sidebar.header("🚜 3. Zemin İyileştirme (SİMÜLATÖR)")
+st.sidebar.header("🚜 3. Zemin İyileştirme")
 iyilestirme_n = st.sidebar.slider("İyileştirme Etkisi (+N Vuruş)", 0, 30, 0, 1)
 
 st.sidebar.header("🗺️ 4. Zemin Isı Haritası")
@@ -36,13 +36,11 @@ try:
     df = veri_isle(yuklenen_dosya)
     
     if not df.empty:
-        # Veri Temizleme (Virgülleri noktaya çevir)
         for col in ['Enlem', 'Boylam', 'Derinlik_m', 'GYS_m', 'N_arazi', 'FC', 'PI']:
             if col in df.columns:
                 if df[col].dtype == object:
                     df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
         
-        # Koordinat Dönüşümü
         min_y, min_x = df['Enlem'].min(), df['Boylam'].min()
         is_utm = abs(min_y) > 90 or abs(min_x) > 180
 
@@ -54,7 +52,6 @@ try:
             df['Y_m'] = (df['Enlem'] - min_y) * 111320.0
             df['X_m'] = (df['Boylam'] - min_x) * (111320.0 * np.cos(np.radians(mean_lat)))
 
-        # Idriss & Boulanger (2008) Hesaplamaları
         df['N_hesap'] = df['N_arazi'] + iyilestirme_n
         gamma, pa = 19.0, 100.0
         df['Sigma_v'] = df['Derinlik_m'] * gamma
@@ -68,7 +65,7 @@ try:
         crr = np.exp((n160cs/14.1) + (n160cs/126)**2 - (n160cs/23.6)**3 + (n160cs/23.6)**4 - 2.8) * (6.9 * np.exp(-mw/4) - 0.058)
         df['FS'] = (crr / csr).fillna(2.0)
 
-        # HOCANIN İSTEĞİ: Güvenli/Sıvılaşmayan zonlar YEŞİL olacak
+        # HOCANIN İSTEĞİ: Güvenli yerler artık yeşil (gri kalmadı)
         def get_color(fs, depth, pi):
             if depth > 20.0 or pi > 12 or fs > 2.0: return 'green' 
             if fs < 1.0: return 'red'
@@ -76,12 +73,11 @@ try:
             return 'green'
         df['Renk'] = [get_color(f, d, p) for f, d, p in zip(df['FS'], df['Derinlik_m'], df['PI'])]
 
-        tab1, tab_gis, tab2, tab3 = st.tabs(["🌍 3D Saha & Isı Haritası", "🗺️ Uydu Haritası", "📏 2D Geoteknik Kesit", "📊 Veri Tablosu"])
+        # UYDU HARİTASI KALDIRILDI - SADECE 3 SEKME KALDI
+        tab1, tab2, tab3 = st.tabs(["🌍 3D Saha & Isı Haritası", "📏 2D Geoteknik Kesit", "📊 Veri Tablosu"])
 
-        # --- SEKME 1: ESKİ MÜKEMMEL 3D GÖRÜNTÜYE DÖNÜŞ ---
         with tab1:
             fig3d = go.Figure()
-            # Sondaj Çubukları
             for s_no in df['Sondaj_No'].unique():
                 temp = df[df['Sondaj_No'] == s_no]
                 fig3d.add_trace(go.Scatter3d(
@@ -91,23 +87,22 @@ try:
                     line=dict(color='lightgray', width=3)
                 ))
 
-            # 3D Isı Yüzeyi (Orijinal Plotly Renk Paleti ve Nearest Metodu)
-            tolerans = 2.0
-            dilim = df[(df['Derinlik_m'] >= hedef_derinlik-tolerans) & (df['Derinlik_m'] <= hedef_derinlik+tolerans)]
+            tol = 1.5
+            dilim = df[(df['Derinlik_m'] >= hedef_derinlik-tol) & (df['Derinlik_m'] <= hedef_derinlik+tol)]
             
             if len(dilim['Sondaj_No'].unique()) >= 3:
                 isi_veri = dilim.sort_values('Derinlik_m').groupby('Sondaj_No').first().reset_index()
-                grid_x, grid_y = np.meshgrid(np.linspace(df['X_m'].min()-10, df['X_m'].max()+10, 50),
-                                             np.linspace(df['Y_m'].min()-10, df['Y_m'].max()+10, 50))
+                grid_x, grid_y = np.meshgrid(np.linspace(df['X_m'].min()-5, df['X_m'].max()+5, 50),
+                                             np.linspace(df['Y_m'].min()-5, df['Y_m'].max()+5, 50))
                 
-                # Attığın fotoğraftaki o geniş ve köşeli yayılımı veren orijinal enterpolasyon
-                grid_z = griddata(isi_veri[['X_m', 'Y_m']].values, isi_veri['FS'].values, (grid_x, grid_y), method='nearest')
+                # İLK BAŞTAKİ KUSURSUZ SMOOTH GÖRÜNÜME DÖNÜŞ (method='linear')
+                grid_z = griddata(isi_veri[['X_m', 'Y_m']].values, isi_veri['FS'].values, (grid_x, grid_y), method='linear')
                 
                 fig3d.add_trace(go.Surface(
                     x=grid_x, y=grid_y, z=np.full(grid_x.shape, -hedef_derinlik),
                     surfacecolor=grid_z, 
-                    colorscale='RdYlGn', # Orijinal muhteşem geçişli palet
-                    cmin=0.5, cmax=2.0,
+                    colorscale='RdYlGn', 
+                    cmin=0.5, cmax=1.5,
                     opacity=0.7, name='Sıvılaşma Riski',
                     colorbar=dict(title="Risk (FS)")
                 ))
@@ -116,24 +111,9 @@ try:
                                 template="plotly_dark", height=700, margin=dict(l=0,r=0,b=0,t=0))
             st.plotly_chart(fig3d, use_container_width=True)
 
-        with tab_gis:
-            try:
-                yuzey = df.sort_values('Derinlik_m').groupby('Sondaj_No').first().reset_index()
-                fig_map = go.Figure(go.Scattermapbox(
-                    lat=yuzey['Enlem'], lon=yuzey['Boylam'], mode='markers+text',
-                    marker=dict(size=14, color=yuzey['Renk']), text=yuzey['Sondaj_No'], textposition="top right"
-                ))
-                fig_map.update_layout(mapbox_style="open-street-map", 
-                                      mapbox=dict(center=dict(lat=yuzey['Enlem'].mean(), lon=yuzey['Boylam'].mean()), zoom=16),
-                                      margin=dict(l=0,r=0,b=0,t=0), height=600)
-                st.plotly_chart(fig_map, use_container_width=True)
-            except:
-                st.warning("Uydu haritası için koordinat verileri eksik veya hatalı.")
-
-        # --- SEKME 2: LENS (DOKUNULMADI, EFSANE KALDI) ---
         with tab2:
             st.markdown("### 📏 2D Stratigrafik Kesit ve Sıvılaşma Lensi")
-            tum_kuyular = list(df['Sondaj_No'].unique())
+            tum_kuyular = sorted(list(df['Sondaj_No'].unique()))
             secili_kuyular = st.multiselect("Kesit Hattı İçin Kuyuları Seçin:", tum_kuyular, default=tum_kuyular[:3])
 
             if len(secili_kuyular) >= 2:
@@ -177,7 +157,8 @@ try:
                 st.info("Kesit oluşturmak için en az 2 sondaj kuyusu seçin.")
 
         with tab3:
-            st.dataframe(df.style.background_gradient(subset=['FS'], cmap='RdYlGn_r'))
+            # MATPLOTLIB HATASI VEREN KOD SİLİNDİ, DÜZ VE TEMİZ TABLO GELDİ
+            st.dataframe(df)
 
     else:
         st.info("Lütfen sol menüden Filyos CSV verilerinizi yükleyin.")
